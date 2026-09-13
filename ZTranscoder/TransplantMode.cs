@@ -308,11 +308,12 @@ internal static class TransplantMode
                     }
 
                     byte[] resampled = TextureCodec.ResampleBilinear(moddedRgba, moddedWidth, moddedHeight, origWidth, origHeight);
-                    byte[] encoded = TextureCodec.EncodeFromRgba32(resampled, origWidth, origHeight, origFormat, texName);
+                    int effectiveOrigFormat = TextureCodec.ResolveOutputFormat(origFormat, origFormat);
+                    byte[] encoded = TextureCodec.EncodeFromRgba32(resampled, origWidth, origHeight, effectiveOrigFormat, texName);
 
                     if (!opt.DryRun)
                     {
-                        origBase["m_TextureFormat"].AsInt = origFormat;
+                        origBase["m_TextureFormat"].AsInt = effectiveOrigFormat;
                         origBase["m_MipCount"].AsInt = 1;
                         origBase["m_CompleteImageSize"].AsInt = encoded.Length;
 
@@ -343,15 +344,16 @@ internal static class TransplantMode
                     int moddedHeight = moddedBase["m_Height"].AsInt;
 
                     byte[] moddedRgba = DecodeTextureRgba32(moddedAfileInst, moddedBase, moddedFormat, moddedWidth, moddedHeight, texName);
-                    byte[] encoded = TextureCodec.EncodeFromRgba32(moddedRgba, moddedWidth, moddedHeight, opt.NewTextureFormat, texName);
+                    int effectiveNewFormat = TextureCodec.ResolveOutputFormat(moddedFormat, opt.NewTextureFormat);
+                    byte[] encoded = TextureCodec.EncodeFromRgba32(moddedRgba, moddedWidth, moddedHeight, effectiveNewFormat, texName);
 
                     Console.WriteLine(
                         $"[{fileName}] Texture2D '{texName}' PathId {moddedInfo.PathId}: not present in original - " +
-                        $"adding as {TextureCodec.FormatName(opt.NewTextureFormat)} ({moddedWidth}x{moddedHeight}).");
+                        $"adding as {TextureCodec.FormatName(effectiveNewFormat)} ({moddedWidth}x{moddedHeight}).");
 
                     if (!opt.DryRun)
                     {
-                        moddedBase["m_TextureFormat"].AsInt = opt.NewTextureFormat;
+                        moddedBase["m_TextureFormat"].AsInt = effectiveNewFormat;
                         moddedBase["m_MipCount"].AsInt = 1;
                         moddedBase["m_CompleteImageSize"].AsInt = encoded.Length;
 

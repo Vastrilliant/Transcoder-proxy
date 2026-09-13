@@ -217,6 +217,7 @@ internal static class Carra2Mode
 
                         AssetTypeValueField texBase = manager.GetBaseField(afileInst, texInfo);
                         int targetFormat = opt.NewTextureFormat ?? texBase["m_TextureFormat"].AsInt;
+                        targetFormat = TextureCodec.ResolveOutputFormat(format, targetFormat);
 
                         int origWidth = texBase["m_Width"].AsInt;
                         int origHeight = texBase["m_Height"].AsInt;

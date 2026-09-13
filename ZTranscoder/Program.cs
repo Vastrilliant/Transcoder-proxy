@@ -310,19 +310,21 @@ internal static class Program
 
                 byte[] rgba32 = TextureCodec.DecodeToRgba32(encodedData, width, height, format, texName);
 
+                int effectiveOutputFormat = TextureCodec.ResolveOutputFormat(format, outputTextureFormat);
+
                 byte[] outputData = TextureCodec.EncodeFromRgba32(
                     rgba32,
                     width,
                     height,
-                    outputTextureFormat,
+                    effectiveOutputFormat,
                     texName);
 
                 Console.WriteLine(
                     $"[Texture] '{texName}' {width}x{height}: format {TextureCodec.FormatName(format)} ({format}) -> " +
-                    $"{TextureCodec.FormatName(outputTextureFormat)} ({outputTextureFormat}), " +
+                    $"{TextureCodec.FormatName(effectiveOutputFormat)} ({effectiveOutputFormat}), " +
                     $"{encodedData.Length:N0} -> {outputData.Length:N0} bytes");
 
-                baseField["m_TextureFormat"].AsInt = outputTextureFormat;
+                baseField["m_TextureFormat"].AsInt = effectiveOutputFormat;
                 baseField["m_MipCount"].AsInt = 1;
                 baseField["m_CompleteImageSize"].AsInt = outputData.Length;
 

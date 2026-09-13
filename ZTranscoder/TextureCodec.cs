@@ -113,6 +113,9 @@ internal static class TextureCodec
         [FmtPVRTC_RGBA4] = (data, w, h, image) => TextureDecoder.DecodePVRTC(data, w, h, image, is2bpp: false),
     };
 
+    public static int ResolveOutputFormat(int sourceFormat, int requestedFormat) =>
+        sourceFormat == FmtRGB24 ? FmtRGBA32 : requestedFormat;
+
     public static string FormatName(int format) => format switch
     {
         FmtRGB24 => "RGB24",
