@@ -114,7 +114,7 @@ internal static class TextureCodec
     };
 
     public static int ResolveOutputFormat(int sourceFormat, int requestedFormat) =>
-        sourceFormat == FmtRGB24 ? FmtRGBA32 : requestedFormat;
+        sourceFormat == FmtRGB24 ? FmtETC2_RGB : requestedFormat;
 
     public static string FormatName(int format) => format switch
     {
