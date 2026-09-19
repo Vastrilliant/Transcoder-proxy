@@ -131,6 +131,95 @@ internal static class TextureCodec
         _ => $"Format{format}"
     };
 
+    public static bool TryGetLevel0Size(int format, int width, int height, out long size)
+    {
+        long w = width;
+        long h = height;
+        size = 0;
+
+        switch (format)
+        {
+            case FmtAlpha8:
+            case FmtR8:
+                size = w * h;
+                return true;
+
+            case FmtARGB4444:
+            case FmtRGBA4444:
+            case FmtRGB565:
+            case FmtRG16:
+                size = w * h * 2;
+                return true;
+
+            case FmtRGB24:
+                size = w * h * 3;
+                return true;
+
+            case FmtRGBA32:
+            case FmtARGB32:
+            case FmtBGRA32:
+                size = w * h * 4;
+                return true;
+
+            case FmtDXT1:
+            case FmtBC4:
+            case FmtETC_RGB4:
+            case FmtETC2_RGB:
+            case FmtETC2_RGBA1:
+            case FmtEAC_R:
+            case FmtEAC_R_SIGNED:
+            case FmtATC_RGB4:
+                size = CeilDiv(w, 4) * CeilDiv(h, 4) * 8;
+                return true;
+
+            case FmtDXT5:
+            case FmtBC5:
+            case FmtBC6H:
+            case FmtBC7:
+            case FmtETC2_RGBA8:
+            case FmtATC_RGBA8:
+                size = CeilDiv(w, 4) * CeilDiv(h, 4) * 16;
+                return true;
+
+            case FmtPVRTC_RGB2:
+            case FmtPVRTC_RGBA2:
+                size = Math.Max(w, 16) * Math.Max(h, 8) / 4;
+                return true;
+
+            case FmtPVRTC_RGB4:
+            case FmtPVRTC_RGBA4:
+                size = Math.Max(w, 8) * Math.Max(h, 8) / 2;
+                return true;
+
+            case FmtDXT1Crunched:
+            case FmtDXT5Crunched:
+            case FmtETC_RGB4Crunched:
+            case FmtETC2_RGBA8Crunched:
+                return true;
+        }
+
+        if (AstcFootprintsByFormat.TryGetValue(format, out FootprintType footprint))
+        {
+            long block = footprint switch
+            {
+                FootprintType.Footprint4x4 => 4,
+                FootprintType.Footprint6x6 => 6,
+                FootprintType.Footprint8x8 => 8,
+                _ => 0,
+            };
+
+            if (block == 0)
+                return false;
+
+            size = CeilDiv(w, block) * CeilDiv(h, block) * 16;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static long CeilDiv(long value, long divisor) => (value + divisor - 1) / divisor;
+
     public static byte[] DecodeToRgba32(byte[] encodedData, int width, int height, int format, string texName)
     {
         if (width <= 0 || height <= 0)

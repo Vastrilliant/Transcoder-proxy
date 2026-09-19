@@ -1,4 +1,3 @@
-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -11,11 +10,13 @@ using SharpCompress.Compressors.Xz;
 
 internal static class Carra2Mode
 {
-    private const int KindSprite = 4;
-    private const int KindTexture2D = 20;
-    private const int KindTexture2DV2 = 6;
+    private const int MaxNameBytes = 4096;
+    private const int MaxHeaderScanInts = 48;
+    private const int MaxTextureDimension = 16384;
 
-    private readonly record struct Carra2Entry(string EntryName, long PathId, int Kind, byte[] Payload);
+    private static ReadOnlySpan<byte> XzMagic => new byte[] { 0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00 };
+
+    private sealed record Carra2Entry(string EntryName, long PathId, byte[] Payload);
 
     private sealed class Options
     {
@@ -55,21 +56,18 @@ internal static class Carra2Mode
 
         Console.WriteLine($"[carra2] Loaded {entries.Count} usable entry(ies) from '{opt.Carra2Path}'.");
 
-        var spriteEntries = new Dictionary<long, Carra2Entry>();
-        var textureEntries = new Dictionary<long, Carra2Entry>();
-
+        var entriesByPathId = new Dictionary<long, List<Carra2Entry>>();
         foreach (Carra2Entry e in entries)
         {
-            if (e.Kind == KindSprite)
-                spriteEntries[e.PathId] = e;
-            else if (e.Kind == KindTexture2D || e.Kind == KindTexture2DV2)
-                textureEntries[e.PathId] = e;
-            else
-                Console.WriteLine($"[carra2] entry '{e.EntryName}': unrecognized kind {e.Kind} - skipped.");
+            if (!entriesByPathId.TryGetValue(e.PathId, out List<Carra2Entry>? bucket))
+            {
+                bucket = new List<Carra2Entry>();
+                entriesByPathId[e.PathId] = bucket;
+            }
+            bucket.Add(e);
         }
 
-        var matchedSpritePathIds = new HashSet<long>();
-        var matchedTexturePathIds = new HashSet<long>();
+        var matchedPathIds = new HashSet<long>();
 
         var manager = new AssetsManager();
         if (opt.TpkPath != null)
@@ -119,12 +117,12 @@ internal static class Carra2Mode
                 foreach (AssetFileInfo info in af.GetAssetsOfType(AssetClassID.Texture2D))
                     textureByPathId[info.PathId] = info;
 
-                foreach (KeyValuePair<long, Carra2Entry> kv in spriteEntries)
+                foreach (KeyValuePair<long, List<Carra2Entry>> kv in entriesByPathId)
                 {
                     if (!spriteByPathId.TryGetValue(kv.Key, out AssetFileInfo? spriteInfo))
                         continue;
 
-                    if (!matchedSpritePathIds.Add(kv.Key))
+                    if (!matchedPathIds.Add(kv.Key))
                     {
                         Console.WriteLine(
                             $"[{dirInfo.Name}] Sprite PathId {kv.Key}: also matched in an earlier SerializedFile - " +
@@ -134,11 +132,23 @@ internal static class Carra2Mode
 
                     try
                     {
-                        if (!TryParseSpritePayload(kv.Value.Payload, out string spriteName, out float[] f))
+                        Carra2Entry? source = null;
+                        string spriteName = "";
+                        float[] f = Array.Empty<float>();
+                        foreach (Carra2Entry candidate in kv.Value)
+                        {
+                            if (TryParseSpritePayload(candidate.Payload, out spriteName, out f))
+                            {
+                                source = candidate;
+                                break;
+                            }
+                        }
+
+                        if (source == null)
                         {
                             Console.WriteLine(
-                                $"[{dirInfo.Name}] Sprite PathId {kv.Key} ('{kv.Value.EntryName}'): payload doesn't " +
-                                "match the expected name+13-float layout - skipped.");
+                                $"[{dirInfo.Name}] Sprite PathId {kv.Key} ('{kv.Value[0].EntryName}'): no payload " +
+                                "matches the expected name+13-float layout - skipped.");
                             spritesSkippedErrors++;
                             continue;
                         }
@@ -186,12 +196,12 @@ internal static class Carra2Mode
                     }
                 }
 
-                foreach (KeyValuePair<long, Carra2Entry> kv in textureEntries)
+                foreach (KeyValuePair<long, List<Carra2Entry>> kv in entriesByPathId)
                 {
                     if (!textureByPathId.TryGetValue(kv.Key, out AssetFileInfo? texInfo))
                         continue;
 
-                    if (!matchedTexturePathIds.Add(kv.Key))
+                    if (!matchedPathIds.Add(kv.Key))
                     {
                         Console.WriteLine(
                             $"[{dirInfo.Name}] Texture2D PathId {kv.Key}: also matched in an earlier SerializedFile - " +
@@ -201,16 +211,27 @@ internal static class Carra2Mode
 
                     try
                     {
-                        string texName; int width, height, dataSize, format; byte[] pixelData;
-                        bool parsedPayload = kv.Value.Kind == KindTexture2DV2
-                            ? TryParseTexturePayloadV2(kv.Value.Payload, out texName, out width, out height, out dataSize, out format, out pixelData)
-                            : TryParseTexturePayload(kv.Value.Payload, out texName, out width, out height, out dataSize, out format, out pixelData);
+                        Carra2Entry? source = null;
+                        string texName = "";
+                        int width = 0, height = 0, dataSize = 0, format = 0;
+                        byte[] pixelData = Array.Empty<byte>();
+                        foreach (Carra2Entry candidate in kv.Value)
+                        {
+                            if (TryParseTexturePayload(
+                                    candidate.Payload, out texName, out width, out height,
+                                    out dataSize, out format, out pixelData))
+                            {
+                                source = candidate;
+                                break;
+                            }
+                        }
 
-                        if (!parsedPayload)
+                        if (source == null)
                         {
                             Console.WriteLine(
-                                $"[{dirInfo.Name}] Texture2D PathId {kv.Key} ('{kv.Value.EntryName}'): payload doesn't " +
-                                "match the expected header layout (likely a placeholder record) - skipped.");
+                                $"[{dirInfo.Name}] Texture2D PathId {kv.Key} ('{kv.Value[0].EntryName}'): no payload " +
+                                "contains a recognizable Texture2D header with a supported format " +
+                                "(likely a placeholder record) - skipped.");
                             texturesSkippedErrors++;
                             continue;
                         }
@@ -281,27 +302,19 @@ internal static class Carra2Mode
                 }
             }
 
-            foreach (KeyValuePair<long, Carra2Entry> kv in spriteEntries)
+            foreach (KeyValuePair<long, List<Carra2Entry>> kv in entriesByPathId)
             {
-                if (!matchedSpritePathIds.Contains(kv.Key))
+                if (!matchedPathIds.Contains(kv.Key))
                     Console.WriteLine(
-                        $"[carra2] Sprite PathId {kv.Key} ('{kv.Value.EntryName}'): no matching Sprite found " +
-                        "anywhere in the original bundle - skipped.");
-            }
-
-            foreach (KeyValuePair<long, Carra2Entry> kv in textureEntries)
-            {
-                if (!matchedTexturePathIds.Contains(kv.Key))
-                    Console.WriteLine(
-                        $"[carra2] Texture2D PathId {kv.Key} ('{kv.Value.EntryName}'): no matching Texture2D found " +
+                        $"[carra2] PathId {kv.Key} ('{kv.Value[0].EntryName}'): no matching Sprite or Texture2D found " +
                         "anywhere in the original bundle - skipped.");
             }
 
             Console.WriteLine(
-                $"[summary] Sprites: {spritesOverridden} overridden, {spritesSkippedErrors} skipped due to errors, " +
-                $"{spriteEntries.Count - matchedSpritePathIds.Count} unmatched. Textures: {texturesReencoded} re-encoded, " +
-                $"{texturesSkippedErrors} skipped due to errors, {textureEntries.Count - matchedTexturePathIds.Count} " +
-                $"unmatched. {touchedFiles} SerializedFile(s) touched.");
+                $"[summary] Sprites: {spritesOverridden} overridden, {spritesSkippedErrors} skipped due to errors. " +
+                $"Textures: {texturesReencoded} re-encoded, {texturesSkippedErrors} skipped due to errors. " +
+                $"{entriesByPathId.Count - matchedPathIds.Count} PathId(s) unmatched. " +
+                $"{touchedFiles} SerializedFile(s) touched.");
 
             if (opt.DryRun)
             {
@@ -330,46 +343,84 @@ internal static class Carra2Mode
             if (string.IsNullOrEmpty(entry.Name))
                 continue;
 
-            string fileName = entry.Name;
-            int dot = fileName.LastIndexOf('.');
-            if (dot <= 0 || dot == fileName.Length - 1)
+            if (!TryParsePathId(entry.Name, out long pathId))
             {
-                Console.WriteLine($"[carra2] entry '{entry.FullName}': name doesn't match '<PathID>.<Kind>' - skipped.");
-                continue;
-            }
-
-            string pathIdPart = fileName[..dot];
-            string kindPart = fileName[(dot + 1)..];
-
-            if (!long.TryParse(pathIdPart, out long pathId) || !int.TryParse(kindPart, out int kind))
-            {
-                Console.WriteLine($"[carra2] entry '{entry.FullName}': could not parse PathID/Kind from '{fileName}' - skipped.");
+                Console.WriteLine($"[carra2] entry '{entry.FullName}': no PathID at the start of '{entry.Name}' - skipped.");
                 continue;
             }
 
             byte[] payload;
             try
             {
-                using Stream entryStream = entry.Open();
-                using var xz = new XZStream(entryStream);
-                using var mem = new MemoryStream();
-                xz.CopyTo(mem);
-                payload = mem.ToArray();
+                payload = ReadEntryPayload(entry);
             }
             catch (Exception ex)
             {
                 Console.WriteLine(
-                    $"[carra2] entry '{entry.FullName}': XZ decompression failed ({ex.GetType().Name}: {ex.Message}) - skipped.");
+                    $"[carra2] entry '{entry.FullName}': could not read payload ({ex.GetType().Name}: {ex.Message}) - skipped.");
                 continue;
             }
 
-            result.Add(new Carra2Entry(entry.FullName, pathId, kind, payload));
+            result.Add(new Carra2Entry(entry.FullName, pathId, payload));
         }
 
         return result;
     }
 
+    private static bool TryParsePathId(string fileName, out long pathId)
+    {
+        int dot = fileName.IndexOf('.');
+        string stem = dot < 0 ? fileName : fileName[..dot];
+        return long.TryParse(stem, out pathId);
+    }
+
+    private static byte[] ReadEntryPayload(ZipArchiveEntry entry)
+    {
+        byte[] raw;
+        using (Stream entryStream = entry.Open())
+        using (var rawMem = new MemoryStream())
+        {
+            entryStream.CopyTo(rawMem);
+            raw = rawMem.ToArray();
+        }
+
+        if (!raw.AsSpan().StartsWith(XzMagic))
+            return raw;
+
+        using var xz = new XZStream(new MemoryStream(raw));
+        using var mem = new MemoryStream();
+        xz.CopyTo(mem);
+        return mem.ToArray();
+    }
+
     private static int Pad4(int n) => (n + 3) & ~3;
+
+    private static int ReadInt(byte[] payload, int start, int index) =>
+        BitConverter.ToInt32(payload, start + index * 4);
+
+    private static bool TryReadName(byte[] payload, out string name, out int afterName)
+    {
+        name = "";
+        afterName = 0;
+
+        if (payload.Length < 4)
+            return false;
+
+        int nameLen = BitConverter.ToInt32(payload, 0);
+        if (nameLen < 0 || nameLen > MaxNameBytes || 4 + Pad4(nameLen) > payload.Length)
+            return false;
+
+        ReadOnlySpan<byte> raw = payload.AsSpan(4, nameLen);
+        foreach (byte b in raw)
+        {
+            if (b < 0x20)
+                return false;
+        }
+
+        name = Encoding.UTF8.GetString(raw);
+        afterName = 4 + Pad4(nameLen);
+        return true;
+    }
 
     private static bool TryParseSpritePayload(byte[] payload, out string name, out float[] fields)
     {
@@ -383,15 +434,21 @@ internal static class Carra2Mode
         if (nameLen < 0 || 4 + nameLen > payload.Length)
             return false;
 
-        name = Encoding.UTF8.GetString(payload, 4, nameLen);
+        string parsedName = Encoding.UTF8.GetString(payload, 4, nameLen);
         int off = 4 + Pad4(nameLen);
         if (off + 13 * 4 > payload.Length)
             return false;
 
-        fields = new float[13];
+        var parsed = new float[13];
         for (int i = 0; i < 13; i++)
-            fields[i] = BitConverter.ToSingle(payload, off + i * 4);
+        {
+            parsed[i] = BitConverter.ToSingle(payload, off + i * 4);
+            if (!float.IsFinite(parsed[i]))
+                return false;
+        }
 
+        name = parsedName;
+        fields = parsed;
         return true;
     }
 
@@ -403,28 +460,18 @@ internal static class Carra2Mode
         width = height = dataSize = format = 0;
         pixelData = Array.Empty<byte>();
 
-        if (payload.Length < 4)
-            return false;
+        int scanStart = 0;
+        if (TryReadName(payload, out string parsedName, out int afterName))
+        {
+            name = parsedName;
+            scanStart = afterName;
+        }
 
-        int nameLen = BitConverter.ToInt32(payload, 0);
-        if (nameLen < 0 || 4 + nameLen > payload.Length)
-            return false;
+        bool located = TryLocateTextureHeader(payload, scanStart, out width, out height, out dataSize, out format);
+        if (!located && scanStart != 0)
+            located = TryLocateTextureHeader(payload, 0, out width, out height, out dataSize, out format);
 
-        name = Encoding.UTF8.GetString(payload, 4, nameLen);
-        int off = 4 + Pad4(nameLen);
-        if (off + 12 * 4 > payload.Length)
-            return false;
-
-        var ints = new int[12];
-        for (int i = 0; i < 12; i++)
-            ints[i] = BitConverter.ToInt32(payload, off + i * 4);
-
-        width = ints[2];
-        height = ints[3];
-        dataSize = ints[4];
-        format = ints[6];
-
-        if (width <= 0 || height <= 0 || dataSize <= 0 || dataSize > payload.Length)
+        if (!located)
             return false;
 
         pixelData = new byte[dataSize];
@@ -432,41 +479,47 @@ internal static class Carra2Mode
         return true;
     }
 
-    private static bool TryParseTexturePayloadV2(
-        byte[] payload, out string name, out int width, out int height,
-        out int dataSize, out int format, out byte[] pixelData)
+    private static bool TryLocateTextureHeader(
+        byte[] payload, int start, out int width, out int height, out int dataSize, out int format)
     {
-        name = "";
         width = height = dataSize = format = 0;
-        pixelData = Array.Empty<byte>();
 
-        if (payload.Length < 4)
-            return false;
+        int intCount = Math.Min(MaxHeaderScanInts, (payload.Length - start) / 4);
 
-        int nameLen = BitConverter.ToInt32(payload, 0);
-        if (nameLen < 0 || 4 + nameLen > payload.Length)
-            return false;
+        for (int k = 0; k + 4 <= intCount; k++)
+        {
+            int w = ReadInt(payload, start, k);
+            int h = ReadInt(payload, start, k + 1);
+            int size = ReadInt(payload, start, k + 2);
 
-        name = Encoding.UTF8.GetString(payload, 4, nameLen);
-        int off = 4 + Pad4(nameLen);
-        if (off + 6 * 4 > payload.Length)
-            return false;
+            if (w <= 0 || h <= 0 || w > MaxTextureDimension || h > MaxTextureDimension || size <= 0)
+                continue;
 
-        var ints = new int[6];
-        for (int i = 0; i < 6; i++)
-            ints[i] = BitConverter.ToInt32(payload, off + i * 4);
+            for (int formatIndex = k + 4; formatIndex >= k + 3; formatIndex--)
+            {
+                if (formatIndex >= intCount)
+                    continue;
 
-        width = ints[1];
-        height = ints[2];
-        dataSize = ints[3];
-        format = ints[5];
+                int candidateFormat = ReadInt(payload, start, formatIndex);
+                if (!TextureCodec.TryGetLevel0Size(candidateFormat, w, h, out long level0))
+                    continue;
 
-        if (width <= 0 || height <= 0 || dataSize <= 0 || dataSize > payload.Length)
-            return false;
+                long headerEnd = start + (formatIndex + 1L) * 4;
+                if (size > payload.Length - headerEnd)
+                    continue;
 
-        pixelData = new byte[dataSize];
-        Buffer.BlockCopy(payload, payload.Length - dataSize, pixelData, 0, dataSize);
-        return true;
+                if (size < level0 || (level0 > 0 && size > level0 * 2 + 1024))
+                    continue;
+
+                width = w;
+                height = h;
+                dataSize = size;
+                format = candidateFormat;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool LooksLikeSerializedFile(string name) =>
