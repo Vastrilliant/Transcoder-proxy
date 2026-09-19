@@ -11,7 +11,7 @@ on:
       output_format:
         description: "Texture output format"
         required: false
-        default: "RGBA32"
+        default: "ASTC_RGBA_6x6"
         type: choice
         options:
           - RGBA32
